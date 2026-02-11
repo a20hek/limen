@@ -1,65 +1,62 @@
-# Limen Monorepo
+# limen
 
-Limen is a focused Reddit post viewer that removes feed distractions.
+read one reddit post.
+don't get pulled into the feed.
 
-## Apps
+drop in a post link and you get:
 
-- `web`: Next.js web app (limen.sh)
-- `extension`: Chrome extension that redirects newly opened Reddit post tabs to Limen
+- the post (clean)
+- media (inline)
+- comments (threaded, collapsible)
 
-## Requirements
+## how it works
 
-- Bun
+- the chrome extension catches reddit post tabs and redirects them to limen with the url prefilled
+- the extension fetches reddit json from the user's browser (so prod doesn't get stuck on backend 403s)
+- the web app renders post + comments
 
-## Install
+## apps
+
+- `web`: next.js web app (limen.sh)
+- `extension`: chrome extension (redirect + reddit fetch bridge)
+
+## quickstart (local)
 
 ```bash
 bun install
-```
-
-## Web App Commands
-
-From repo root:
-
-```bash
 bun run dev:web
-bun run build:web
-bun run start:web
-bun run lint:web
 ```
 
-Convenience aliases:
+then:
+
+1. load the extension unpacked via `chrome://extensions` (developer mode)
+2. select `extension`
+3. open any reddit post url in chrome and it should redirect to `http://localhost:3000/?url=...`
+
+## important
+
+limen loads reddit content via the extension bridge.
+if the extension isn't installed/enabled, the web app can't fetch posts.
+
+## urls
+
+- `https://limen.sh/?url=<reddit_post_url>` prefills + auto-opens
+
+## dev commands
 
 ```bash
 bun run dev
 bun run build
 bun run lint
+bun run start:web
 ```
 
-## URL Handoff Contract
-
-Limen web supports this entrypoint:
-
-- `https://limen.sh/?url=<reddit_post_url>`
-
-When `url` is present, the web app prefills the input and auto-opens the post.
-
-## Chrome Extension
-
-Location:
-
-- `extension`
-
-Load unpacked via `chrome://extensions`, then select `extension`.
-
-Behavior:
-
-- Trigger: new tabs and existing/current tab navigations
-- Redirect condition: URL is a Reddit post URL
-- Action (current dev default): same tab navigates to `http://localhost:3000/?url=<encoded_reddit_url>`
-
-Optional packaging command:
+## extension packaging
 
 ```bash
 bun run extension:pack
 ```
+
+## notes
+
+- limen is not affiliated with reddit

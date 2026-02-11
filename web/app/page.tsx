@@ -17,6 +17,81 @@ import {
   formatScore,
 } from "./lib/reddit";
 
+const EXTENSION_REQUEST_TYPE = "LIMEN_FETCH_REDDIT";
+const EXTENSION_RESPONSE_TYPE = "LIMEN_FETCH_REDDIT_RESULT";
+const EXTENSION_TIMEOUT_MS = 20_000;
+
+type ExtensionSuccessResponse = {
+  type: typeof EXTENSION_RESPONSE_TYPE;
+  requestId: string;
+  ok: true;
+  payload: RedditViewerResponse;
+};
+
+type ExtensionErrorResponse = {
+  type: typeof EXTENSION_RESPONSE_TYPE;
+  requestId: string;
+  ok: false;
+  error?: string;
+};
+
+type ExtensionBridgeResponse = ExtensionSuccessResponse | ExtensionErrorResponse;
+
+function isBridgeResponse(
+  value: unknown,
+  requestId: string,
+): value is ExtensionBridgeResponse {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.type === EXTENSION_RESPONSE_TYPE &&
+    candidate.requestId === requestId &&
+    typeof candidate.ok === "boolean"
+  );
+}
+
+function fetchRedditViaExtension(url: string): Promise<RedditViewerResponse> {
+  const requestId = `limen-${crypto.randomUUID()}`;
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      window.removeEventListener("message", handleMessage);
+      reject(
+        new Error(
+          "Limen extension did not respond. Reload the extension and this page, then try again.",
+        ),
+      );
+    }, EXTENSION_TIMEOUT_MS);
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("message", handleMessage);
+    }
+
+    function handleMessage(event: MessageEvent) {
+      if (event.source !== window) return;
+      if (!isBridgeResponse(event.data, requestId)) return;
+
+      cleanup();
+
+      if (event.data.ok) {
+        resolve(event.data.payload);
+        return;
+      }
+
+      reject(
+        new Error(event.data.error ?? "Unable to load this post via extension."),
+      );
+    }
+
+    window.addEventListener("message", handleMessage);
+    window.postMessage(
+      { type: EXTENSION_REQUEST_TYPE, requestId, url },
+      window.location.origin,
+    );
+  });
+}
+
 function countReplies(node: RedditCommentNode): number {
   let count = node.replies.length;
   for (const reply of node.replies) count += countReplies(reply);
@@ -108,20 +183,7 @@ export default function Home() {
     setError("");
 
     try {
-      const response = await fetch("/api/reddit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmedUrl }),
-      });
-
-      const payload = (await response.json()) as RedditViewerResponse & {
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Unable to load this post.");
-      }
-
+      const payload = await fetchRedditViaExtension(trimmedUrl);
       setData(payload);
     } catch (submitError) {
       setData(null);

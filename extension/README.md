@@ -1,46 +1,44 @@
-# Limen Chrome Extension
+# limen extension
 
-This extension redirects newly opened Reddit **post** tabs to Limen so the post opens directly in focus mode.
+this extension does two things:
 
-## Behavior
+- if you open a reddit post, it redirects the tab to limen (with the url prefilled)
+- when you're on limen (`localhost` or `limen.sh`), it fetches the reddit json in the background and hands it back to the page
 
-- Works for both new tabs and existing/current tab navigations.
-- Redirects only Reddit post URLs (`/comments/{id}` and `redd.it/{id}`).
-- Supports Google redirect links (for example `google.com/url?...q=<reddit-url>`).
-- Ignores subreddit/home/profile pages.
-- Redirect target format:
-  - `http://localhost:3000/?url=<encoded_original_reddit_url>`
+## behavior
 
-## Install (Development)
+- works for new tabs and existing/current tab navigations
+- only redirects actual post urls (`/comments/{id}` and `redd.it/{id}`)
+- supports google redirect links (like `google.com/url?...q=<reddit-url>`)
+- ignores subreddit/home/profile pages
+- redirect target looks like: `http://localhost:3000/?url=<encoded_original_reddit_url>`
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select this folder: `extension`.
+## install (dev)
 
-## Manual Verification
+1. open `chrome://extensions`
+2. enable developer mode
+3. click load unpacked
+4. select this folder: `extension`
 
-1. Run the web app from repo root: `bun run dev:web` (serves on `http://localhost:3000`).
-2. Open `chrome://extensions` and click **Reload** on the Limen extension.
-3. Open a new tab to a Reddit post URL.
-4. Confirm the tab redirects to `http://localhost:3000/?url=...` and the post auto-loads.
-5. In an existing tab, navigate to a Reddit post URL.
-6. Confirm it also redirects to `http://localhost:3000/?url=...`.
-7. Open a tab to a non-post Reddit URL (for example `https://www.reddit.com/r/programming/`).
-8. Confirm there is no redirect.
+## quick test
 
-## If It Still Doesn't Trigger
+1. run the web app from repo root: `bun run dev:web` (serves `http://localhost:3000`)
+2. in `chrome://extensions`, hit reload on the limen extension
+3. open a reddit post url
+4. it should redirect to `http://localhost:3000/?url=...` and auto-load
 
-1. In `chrome://extensions`, open **Details** for Limen extension.
-2. Click **Inspect views: service worker**.
-3. Keep DevTools open, then reproduce the tab-open action.
-4. Check for runtime errors in the service worker console.
+## debugging
 
-## Switching to Production Later
+- open `chrome://extensions` -> limen -> inspect views: service worker
+- also check the limen page console (the content-script bridge lives there)
+- if things are weird: reload extension, then hard refresh the limen tab
 
-Change `LIMEN_BASE_URL` in `background.js` to `https://limen.sh`.
+## switching to prod
 
-## Permissions
+change `LIMEN_BASE_URL` in `background.js` to `https://limen.sh`.
 
-- `tabs`: needed to detect newly created tabs and update their URL.
-- Reddit host permissions: used to inspect and match Reddit URLs.
+## permissions (why we ask)
+
+- `tabs`: detect and update tabs for redirect
+- reddit host permissions: let the service worker fetch reddit json
+- content script matches on `localhost`/`limen.sh`: lets the page talk to the extension

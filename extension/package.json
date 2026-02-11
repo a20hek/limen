@@ -3,6 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "pack": "mkdir -p dist && zip -r dist/limen-extension.zip manifest.json background.js README.md"
+    "pack": "mkdir -p dist && zip -r dist/limen-extension.zip manifest.json background.js content.js README.md"
   }
 }

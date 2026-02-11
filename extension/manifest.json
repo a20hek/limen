@@ -10,9 +10,22 @@
     "https://old.reddit.com/*",
     "https://m.reddit.com/*",
     "https://np.reddit.com/*",
+    "https://api.reddit.com/*",
     "https://redd.it/*"
   ],
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://localhost:3000/*",
+        "https://limen.sh/*",
+        "https://www.limen.sh/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
 }
