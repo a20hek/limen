@@ -48,6 +48,11 @@ type RedditViewerResponse = {
   comments: RedditCommentNode[];
 };
 
+type RedditUrlInfo = {
+  originalUrl: string;
+  canonicalUrl: string;
+};
+
 const REDDIT_HOSTS = new Set([
   "reddit.com",
   "www.reddit.com",
@@ -61,7 +66,10 @@ const GOOGLE_REDIRECT_HOSTS = new Set(["www.google.com", "google.com"]);
 
 const MAX_COMMENTS = 2000;
 const MAX_COMMENT_DEPTH = 20;
-const MORE_CHILDREN_BATCH = 100;
+const APIFY_API_BASE = "https://api.apify.com/v2";
+const DEFAULT_APIFY_REDDIT_ACTOR_ID = "backhoe/reddit-post-scraper";
+const APIFY_MAX_COMMENTS = 500;
+const APIFY_TIMEOUT_MS = 120_000;
 
 class ValidationError extends Error {
   status = 400;
@@ -105,7 +113,6 @@ function tryParseUrl(input: string): URL | null {
 function normalizeRedditUrl(input: string): {
   originalUrl: string;
   canonicalUrl: string;
-  jsonEndpoint: string;
 } {
   const directUrl = tryParseUrl(input);
   if (!directUrl) {
@@ -139,354 +146,369 @@ function normalizeRedditUrl(input: string): {
   }
 
   const canonicalUrl = `https://www.reddit.com/comments/${postId}`;
-  const jsonEndpoint = `${canonicalUrl}.json?raw_json=1&sort=confidence&limit=500`;
 
   return {
     originalUrl: directUrl.toString(),
     canonicalUrl,
-    jsonEndpoint,
   };
 }
 
-function extractPostMedia(
-  postData: Record<string, unknown>,
-): RedditMediaItem[] {
-  const media: RedditMediaItem[] = [];
-
-  const mediaMetadata = postData.media_metadata as
-    | Record<
-        string,
-        {
-          status?: string;
-          e?: string;
-          s?: { u?: string; x?: number; y?: number };
-        }
-      >
-    | undefined;
-
-  const galleryItems = (
-    postData.gallery_data as { items?: { media_id?: string }[] } | undefined
-  )?.items;
-
-  if (Array.isArray(galleryItems) && mediaMetadata) {
-    for (const item of galleryItems) {
-      const mediaId = item.media_id;
-      if (!mediaId) {
-        continue;
-      }
-      const metadata = mediaMetadata[mediaId];
-      if (!metadata || metadata.status !== "valid") {
-        continue;
-      }
-      const sourceUrl = metadata.s?.u;
-      if (!sourceUrl) {
-        continue;
-      }
-
-      media.push({
-        kind: "image",
-        url: decodeHtmlEntities(sourceUrl),
-        width: metadata.s?.x,
-        height: metadata.s?.y,
-      });
-    }
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
   }
-
-  if (media.length > 0) {
-    return media;
-  }
-
-  const redditVideo = (
-    postData.secure_media as {
-      reddit_video?: { fallback_url?: string; width?: number; height?: number };
-    } | null
-  )?.reddit_video;
-
-  if (redditVideo?.fallback_url) {
-    media.push({
-      kind: "video",
-      url: decodeHtmlEntities(redditVideo.fallback_url),
-      width: redditVideo.width,
-      height: redditVideo.height,
-    });
-    return media;
-  }
-
-  const previewImage = (
-    postData.preview as {
-      images?: {
-        source?: { url?: string; width?: number; height?: number };
-      }[];
-    } | null
-  )?.images?.[0]?.source;
-
-  const destinationUrl =
-    typeof postData.url_overridden_by_dest === "string"
-      ? postData.url_overridden_by_dest
-      : typeof postData.url === "string"
-        ? postData.url
-        : "";
-
-  const imageByHint =
-    typeof postData.post_hint === "string" && postData.post_hint === "image"
-      ? destinationUrl
-      : "";
-
-  if (imageByHint) {
-    media.push({ kind: "image", url: decodeHtmlEntities(imageByHint) });
-    return media;
-  }
-
-  if (previewImage?.url) {
-    media.push({
-      kind: "image",
-      url: decodeHtmlEntities(previewImage.url),
-      width: previewImage.width,
-      height: previewImage.height,
-    });
-  }
-
-  return media;
+  return null;
 }
 
-async function fetchRedditListing(jsonEndpoint: string): Promise<Response> {
-  const endpoints = [
-    jsonEndpoint,
-    jsonEndpoint.replace("www.reddit.com", "old.reddit.com"),
-    jsonEndpoint.replace("www.reddit.com", "api.reddit.com"),
-  ];
-
-  let lastStatus: number | null = null;
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        headers: {
-          "User-Agent": "limen/1.0",
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(12_000),
-      });
-
-      if (response.ok) {
-        return response;
-      }
-
-      lastStatus = response.status;
-    } catch {
-      // try next endpoint
-    }
+function toStringValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
   }
-
-  if (lastStatus) {
-    throw new UpstreamError(
-      lastStatus === 403
-        ? "Reddit denied the request. If Reddit is blocked on this machine, allow this app to access reddit.com."
-        : "Reddit could not return this post right now.",
-      lastStatus,
-    );
-  }
-
-  throw new UpstreamError(
-    "Could not reach Reddit from this machine. If you blocked reddit.com via hosts/firewall, this app is blocked too.",
-    502,
-  );
+  return undefined;
 }
 
-type MoreStub = {
-  parentId: string;
-  childIds: string[];
-};
+function toNumberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
 
-function parseComments(
-  children: unknown,
+function toUnixSeconds(value: unknown): number | undefined {
+  const numeric = toNumberValue(value);
+  if (numeric === undefined) {
+    return undefined;
+  }
+
+  if (numeric > 1_000_000_000_000) {
+    return Math.floor(numeric / 1000);
+  }
+  return Math.floor(numeric);
+}
+
+function stripThingPrefix(value: string, prefix: string): string {
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function normalizeActorId(input: string): string {
+  if (input.includes("~")) {
+    return input;
+  }
+  return input.replace("/", "~");
+}
+
+function extractPostIdFromText(input: string): string | undefined {
+  const match = input.match(/\/comments\/([a-z0-9]+)/i);
+  return match?.[1]?.toLowerCase();
+}
+
+function inferDomain(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function toApifyCommentNode(
+  input: unknown,
   depth = 0,
   state = { count: 0 },
-  moreStubs: MoreStub[] = [],
-): RedditCommentNode[] {
+): RedditCommentNode | null {
+  const node = asRecord(input);
+  if (!node) {
+    return null;
+  }
+
   if (
-    !Array.isArray(children) ||
     depth > MAX_COMMENT_DEPTH ||
     state.count >= MAX_COMMENTS
   ) {
+    return null;
+  }
+
+  const rawBody = toStringValue(node.body) ?? toStringValue(node.text) ?? "";
+  const body = decodeHtmlEntities(rawBody);
+  if (!body.trim()) {
+    return null;
+  }
+
+  state.count += 1;
+
+  const repliesSource = Array.isArray(node.replies) ? node.replies : [];
+  const replies: RedditCommentNode[] = [];
+
+  for (const reply of repliesSource) {
+    if (state.count >= MAX_COMMENTS) {
+      break;
+    }
+    const parsedReply = toApifyCommentNode(reply, depth + 1, state);
+    if (parsedReply) {
+      replies.push(parsedReply);
+    }
+  }
+
+  const rawId = toStringValue(node.id) ?? crypto.randomUUID();
+  return {
+    id: stripThingPrefix(rawId, "t1_"),
+    author: toStringValue(node.author) ?? "[deleted]",
+    body,
+    score: toNumberValue(node.score) ?? toNumberValue(node.upvotes) ?? 0,
+    createdUtc:
+      toUnixSeconds(node.created_utc) ?? toUnixSeconds(node.createdUtc) ?? 0,
+    replies,
+  };
+}
+
+function parseApifyComments(
+  input: unknown,
+  state = { count: 0 },
+): RedditCommentNode[] {
+  if (!Array.isArray(input)) {
     return [];
   }
 
   const parsed: RedditCommentNode[] = [];
-
-  for (const child of children) {
+  for (const node of input) {
     if (state.count >= MAX_COMMENTS) {
       break;
     }
-
-    const node = child as { kind?: string; data?: Record<string, unknown> };
-
-    if (node.kind === "more" && node.data) {
-      const moreChildren = node.data.children as string[] | undefined;
-      const parentId =
-        typeof node.data.parent_id === "string" ? node.data.parent_id : "";
-      if (Array.isArray(moreChildren) && moreChildren.length > 0 && parentId) {
-        moreStubs.push({ parentId, childIds: moreChildren });
-      }
-      continue;
+    const parsedNode = toApifyCommentNode(node, 0, state);
+    if (parsedNode) {
+      parsed.push(parsedNode);
     }
-
-    if (node.kind !== "t1" || !node.data) {
-      continue;
-    }
-
-    const author =
-      typeof node.data.author === "string" ? node.data.author : "[deleted]";
-    const body = typeof node.data.body === "string" ? node.data.body : "";
-
-    if (!body.trim()) {
-      continue;
-    }
-
-    state.count += 1;
-
-    const repliesListing = node.data.replies as
-      | { data?: { children?: unknown[] } }
-      | ""
-      | undefined;
-
-    const repliesChildren =
-      repliesListing && typeof repliesListing === "object"
-        ? repliesListing.data?.children
-        : undefined;
-
-    parsed.push({
-      id: typeof node.data.id === "string" ? node.data.id : crypto.randomUUID(),
-      author,
-      body,
-      score: typeof node.data.score === "number" ? node.data.score : 0,
-      createdUtc:
-        typeof node.data.created_utc === "number" ? node.data.created_utc : 0,
-      replies: parseComments(repliesChildren, depth + 1, state, moreStubs),
-    });
   }
 
   return parsed;
 }
 
-async function fetchMoreChildren(
-  postId: string,
-  childIds: string[],
-): Promise<{ kind?: string; data?: Record<string, unknown> }[]> {
-  const allThings: { kind?: string; data?: Record<string, unknown> }[] = [];
+function countComments(nodes: RedditCommentNode[]): number {
+  let total = 0;
+  for (const node of nodes) {
+    total += 1;
+    if (node.replies.length > 0) {
+      total += countComments(node.replies);
+    }
+  }
+  return total;
+}
 
-  for (let i = 0; i < childIds.length; i += MORE_CHILDREN_BATCH) {
-    const batch = childIds.slice(i, i + MORE_CHILDREN_BATCH);
-    const url = `https://www.reddit.com/api/morechildren.json?api_type=json&link_id=t3_${postId}&children=${batch.join(",")}&limit_children=false&raw_json=1`;
+function toMediaItem(input: unknown): RedditMediaItem | null {
+  const media = asRecord(input);
+  if (!media) {
+    return null;
+  }
 
-    try {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "limen/1.0",
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(12_000),
+  const url =
+    toStringValue(media.url) ??
+    toStringValue(media.src) ??
+    toStringValue(media.fallback_url);
+
+  if (!url) {
+    return null;
+  }
+
+  const type =
+    (
+      toStringValue(media.type) ??
+      toStringValue(media.kind) ??
+      toStringValue(media.mediaType) ??
+      ""
+    ).toLowerCase();
+
+  if (type.includes("video")) {
+    return {
+      kind: "video",
+      url: decodeHtmlEntities(url),
+      width: toNumberValue(media.width),
+      height: toNumberValue(media.height),
+    };
+  }
+
+  return {
+    kind: "image",
+    url: decodeHtmlEntities(url),
+    width: toNumberValue(media.width),
+    height: toNumberValue(media.height),
+    caption: toStringValue(media.caption),
+  };
+}
+
+function extractPostMedia(postData: Record<string, unknown>): RedditMediaItem[] {
+  const media: RedditMediaItem[] = [];
+
+  if (Array.isArray(postData.media)) {
+    for (const item of postData.media) {
+      const parsed = toMediaItem(item);
+      if (parsed) {
+        media.push(parsed);
+      }
+    }
+  } else {
+    const parsed = toMediaItem(postData.media);
+    if (parsed) {
+      media.push(parsed);
+    }
+  }
+
+  if (media.length === 0) {
+    const fallbackImage =
+      toStringValue(postData.image) ?? toStringValue(postData.thumbnail);
+    if (fallbackImage?.startsWith("http")) {
+      media.push({
+        kind: "image",
+        url: decodeHtmlEntities(fallbackImage),
       });
-
-      if (!response.ok) continue;
-
-      const data = (await response.json()) as {
-        json?: {
-          data?: {
-            things?: { kind?: string; data?: Record<string, unknown> }[];
-          };
-        };
-      };
-      const things = data?.json?.data?.things;
-      if (Array.isArray(things)) {
-        allThings.push(...things);
-      }
-    } catch {
-      // continue with what we have
     }
   }
 
-  return allThings;
+  return media;
 }
 
-function buildTreeFromFlat(
-  things: { kind?: string; data?: Record<string, unknown> }[],
-): { byParent: Map<string, RedditCommentNode[]>; allIds: Set<string> } {
-  const nodeMap = new Map<string, RedditCommentNode>();
-  const parentMap = new Map<string, string>();
+function selectPostItem(
+  items: Record<string, unknown>[],
+): Record<string, unknown> | null {
+  for (const item of items) {
+    const dataType = toStringValue(item.dataType)?.toLowerCase();
+    const entityType = toStringValue(item.entityType)?.toLowerCase();
+    if (dataType === "post" || entityType === "post") {
+      return item;
+    }
+  }
 
-  for (const thing of things) {
-    if (thing.kind !== "t1" || !thing.data) continue;
+  return items[0] ?? null;
+}
 
-    const id =
-      typeof thing.data.id === "string" ? thing.data.id : crypto.randomUUID();
-    const author =
-      typeof thing.data.author === "string" ? thing.data.author : "[deleted]";
-    const body = typeof thing.data.body === "string" ? thing.data.body : "";
+function buildPostPayload(
+  postItem: Record<string, unknown>,
+  normalized: RedditUrlInfo,
+  commentsCount: number,
+): RedditPostPayload {
+  const stats = asRecord(postItem.stats);
 
-    if (!body.trim()) continue;
+  const rawPermalink =
+    toStringValue(postItem.permalink) ?? toStringValue(postItem.url) ?? "";
+  const permalink = rawPermalink.startsWith("/")
+    ? `https://www.reddit.com${rawPermalink}`
+    : rawPermalink.startsWith("http")
+      ? rawPermalink
+      : normalized.canonicalUrl;
 
-    const parentId =
-      typeof thing.data.parent_id === "string" ? thing.data.parent_id : "";
+  const rawId = toStringValue(postItem.id) ?? "";
+  const idFromPermalink = extractPostIdFromText(permalink);
+  const postId = stripThingPrefix(rawId, "t3_") || idFromPermalink || "";
 
-    nodeMap.set(id, {
-      id,
-      author,
-      body,
-      score: typeof thing.data.score === "number" ? thing.data.score : 0,
-      createdUtc:
-        typeof thing.data.created_utc === "number" ? thing.data.created_utc : 0,
-      replies: [],
+  const destinationUrl =
+    toStringValue(postItem.link) ??
+    toStringValue(postItem.linkUrl) ??
+    toStringValue(postItem.url) ??
+    permalink;
+
+  return {
+    id: postId,
+    title: toStringValue(postItem.title) ?? "Untitled",
+    author: toStringValue(postItem.author) ?? "[deleted]",
+    subreddit: toStringValue(postItem.subreddit) ?? "unknown",
+    createdUtc:
+      toUnixSeconds(postItem.created_utc) ?? toUnixSeconds(postItem.createdUtc) ?? 0,
+    score:
+      toNumberValue(postItem.score) ??
+      toNumberValue(postItem.upvotes) ??
+      toNumberValue(stats?.upvotes) ??
+      0,
+    upvoteRatio:
+      toNumberValue(postItem.upvote_ratio) ??
+      toNumberValue(postItem.upvoteRatio) ??
+      toNumberValue(stats?.upvote_ratio) ??
+      toNumberValue(stats?.upvoteRatio),
+    numComments:
+      toNumberValue(postItem.num_comments) ??
+      toNumberValue(postItem.numComments) ??
+      toNumberValue(stats?.comments_total) ??
+      commentsCount,
+    permalink,
+    domain:
+      toStringValue(postItem.domain) ||
+      inferDomain(destinationUrl) ||
+      "reddit.com",
+    selftext:
+      decodeHtmlEntities(
+        toStringValue(postItem.body) ?? toStringValue(postItem.selftext) ?? "",
+      ),
+    url: destinationUrl,
+    media: extractPostMedia(postItem),
+  };
+}
+
+async function fetchFromApify(canonicalUrl: string): Promise<unknown[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) {
+    throw new UpstreamError(
+      "Server is missing APIFY_TOKEN. Add it in deployment environment variables.",
+      500,
+    );
+  }
+
+  const actorId = normalizeActorId(
+    process.env.APIFY_REDDIT_ACTOR_ID?.trim() ??
+      DEFAULT_APIFY_REDDIT_ACTOR_ID,
+  );
+
+  const endpoint = `${APIFY_API_BASE}/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?format=json&clean=true`;
+
+  const input = {
+    startUrls: [canonicalUrl],
+    skipComments: false,
+    maxComments: APIFY_MAX_COMMENTS,
+    sort: "confidence",
+    includeNSFW: true,
+  };
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(input),
+      cache: "no-store",
+      signal: AbortSignal.timeout(APIFY_TIMEOUT_MS),
     });
-    parentMap.set(id, parentId);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError")
+    ) {
+      throw new UpstreamError("Apify request timed out.", 504);
+    }
+    throw new UpstreamError("Could not reach Apify right now.", 502);
   }
 
-  for (const [id, parentFullId] of parentMap) {
-    const parentShortId = parentFullId.replace(/^t[0-9]_/, "");
-    const parentNode = nodeMap.get(parentShortId);
-    if (parentNode) {
-      const child = nodeMap.get(id);
-      if (child) {
-        parentNode.replies.push(child);
-      }
-    }
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 180);
+    const suffix = detail ? ` Details: ${detail}` : "";
+    const message =
+      response.status === 401 || response.status === 403
+        ? `Apify rejected the request. Check APIFY_TOKEN and actor access.${suffix}`
+        : `Apify could not return this post right now.${suffix}`;
+    throw new UpstreamError(message, 502);
   }
 
-  const byParent = new Map<string, RedditCommentNode[]>();
-  const allIds = new Set(nodeMap.keys());
-
-  for (const [id, parentFullId] of parentMap) {
-    const parentShortId = parentFullId.replace(/^t[0-9]_/, "");
-    if (!nodeMap.has(parentShortId)) {
-      const existing = byParent.get(parentFullId) ?? [];
-      const child = nodeMap.get(id);
-      if (child) {
-        existing.push(child);
-        byParent.set(parentFullId, existing);
-      }
-    }
+  const data = (await response.json()) as unknown;
+  if (!Array.isArray(data)) {
+    throw new UpstreamError("Apify returned an unexpected response format.", 502);
   }
 
-  return { byParent, allIds };
-}
-
-function insertIntoTree(
-  tree: RedditCommentNode[],
-  parentId: string,
-  nodes: RedditCommentNode[],
-): boolean {
-  for (const comment of tree) {
-    if (`t1_${comment.id}` === parentId || `t3_${comment.id}` === parentId) {
-      comment.replies.push(...nodes);
-      return true;
-    }
-    if (comment.replies.length > 0) {
-      if (insertIntoTree(comment.replies, parentId, nodes)) return true;
-    }
-  }
-  return false;
+  return data;
 }
 
 export async function POST(request: Request) {
@@ -503,98 +525,45 @@ export async function POST(request: Request) {
 
     const normalized = normalizeRedditUrl(inputUrl);
 
-    const redditResponse = await fetchRedditListing(normalized.jsonEndpoint);
+    const apifyItems = await fetchFromApify(normalized.canonicalUrl);
+    const records = apifyItems
+      .map((item) => asRecord(item))
+      .filter((item): item is Record<string, unknown> => item !== null);
 
-    if (!redditResponse.ok) {
-      const reason =
-        redditResponse.status === 403
-          ? "Reddit rejected this request. Try another public post URL."
-          : "Reddit could not return this post right now.";
-
+    if (records.length === 0) {
       return NextResponse.json(
-        { error: reason },
-        { status: redditResponse.status },
-      );
-    }
-
-    const listings = (await redditResponse.json()) as {
-      data?: { children?: { data?: Record<string, unknown> }[] };
-    }[];
-
-    const postData = listings?.[0]?.data?.children?.[0]?.data;
-
-    if (!postData) {
-      return NextResponse.json(
-        { error: "Could not parse this Reddit post." },
+        { error: "Apify returned no data for this post URL." },
         { status: 422 },
       );
     }
 
-    const commentsChildren = listings?.[1]?.data?.children;
-    const postId = typeof postData.id === "string" ? postData.id : "";
-
-    const moreStubs: MoreStub[] = [];
-    const comments = parseComments(
-      commentsChildren,
-      0,
-      { count: 0 },
-      moreStubs,
-    );
-
-    const allMoreChildIds = moreStubs.flatMap((s) => s.childIds);
-    if (allMoreChildIds.length > 0 && postId) {
-      try {
-        const moreThings = await fetchMoreChildren(postId, allMoreChildIds);
-        if (moreThings.length > 0) {
-          const { byParent } = buildTreeFromFlat(moreThings);
-          for (const [parentId, nodes] of byParent) {
-            if (!insertIntoTree(comments, parentId, nodes)) {
-              if (parentId === `t3_${postId}`) {
-                comments.push(...nodes);
-              }
-            }
-          }
-        }
-      } catch {}
+    const postItem = selectPostItem(records);
+    if (!postItem) {
+      return NextResponse.json(
+        { error: "Apify did not return a Reddit post payload." },
+        { status: 422 },
+      );
     }
+
+    const nestedComments = parseApifyComments(postItem.comments);
+    const fallbackComments =
+      nestedComments.length > 0
+        ? nestedComments
+        : parseApifyComments(
+            records.filter((item) => {
+              const dataType = toStringValue(item.dataType)?.toLowerCase();
+              const entityType = toStringValue(item.entityType)?.toLowerCase();
+              return dataType === "comment" || entityType === "comment";
+            }),
+          );
+    const comments = fallbackComments;
+    const commentsCount = countComments(comments);
 
     const payload: RedditViewerResponse = {
       requestedUrl: normalized.originalUrl,
       canonicalUrl: normalized.canonicalUrl,
       fetchedAt: new Date().toISOString(),
-      post: {
-        id: postId,
-        title: typeof postData.title === "string" ? postData.title : "Untitled",
-        author:
-          typeof postData.author === "string" ? postData.author : "[deleted]",
-        subreddit:
-          typeof postData.subreddit === "string"
-            ? postData.subreddit
-            : "unknown",
-        createdUtc:
-          typeof postData.created_utc === "number" ? postData.created_utc : 0,
-        score: typeof postData.score === "number" ? postData.score : 0,
-        upvoteRatio:
-          typeof postData.upvote_ratio === "number"
-            ? postData.upvote_ratio
-            : undefined,
-        numComments:
-          typeof postData.num_comments === "number" ? postData.num_comments : 0,
-        permalink:
-          typeof postData.permalink === "string"
-            ? `https://www.reddit.com${postData.permalink}`
-            : normalized.canonicalUrl,
-        domain: typeof postData.domain === "string" ? postData.domain : "",
-        selftext:
-          typeof postData.selftext === "string" ? postData.selftext : "",
-        url:
-          typeof postData.url_overridden_by_dest === "string"
-            ? postData.url_overridden_by_dest
-            : typeof postData.url === "string"
-              ? postData.url
-              : "",
-        media: extractPostMedia(postData),
-      },
+      post: buildPostPayload(postItem, normalized, commentsCount),
       comments,
     };
 
