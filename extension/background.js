@@ -1,4 +1,4 @@
-const LIMEN_BASE_URL = "http://localhost:3000";
+const LIMEN_BASE_URL = "https://limen.sh";
 
 const REDDIT_HOSTS = new Set([
   "reddit.com",

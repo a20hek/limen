@@ -11,7 +11,7 @@ this extension does two things:
 - only redirects actual post urls (`/comments/{id}` and `redd.it/{id}`)
 - supports google redirect links (like `google.com/url?...q=<reddit-url>`)
 - ignores subreddit/home/profile pages
-- redirect target looks like: `http://localhost:3000/?url=<encoded_original_reddit_url>`
+- redirect target looks like: `https://limen.sh/?url=<encoded_original_reddit_url>`
 
 ## install (dev)
 
@@ -25,7 +25,7 @@ this extension does two things:
 1. run the web app from repo root: `bun run dev:web` (serves `http://localhost:3000`)
 2. in `chrome://extensions`, hit reload on the limen extension
 3. open a reddit post url
-4. it should redirect to `http://localhost:3000/?url=...` and auto-load
+4. it should redirect to `https://limen.sh/?url=...` and auto-load
 
 ## debugging
 
@@ -35,7 +35,9 @@ this extension does two things:
 
 ## switching to prod
 
-change `LIMEN_BASE_URL` in `background.js` to `https://limen.sh`.
+this repo defaults to `https://limen.sh`.
+
+for local dev, set `LIMEN_BASE_URL` in `background.js` to `http://localhost:3000`.
 
 ## permissions (why we ask)
 

@@ -31,7 +31,9 @@ then:
 
 1. load the extension unpacked via `chrome://extensions` (developer mode)
 2. select `extension`
-3. open any reddit post url in chrome and it should redirect to `http://localhost:3000/?url=...`
+3. open any reddit post url in chrome and it should redirect to `https://limen.sh/?url=...`
+
+if you're doing local dev instead of prod, set `LIMEN_BASE_URL` in `extension/background.js` back to `http://localhost:3000`.
 
 ## important
 
