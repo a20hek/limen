@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+/web/node_modules
+/extension/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -15,10 +17,15 @@
 
 # next.js
 /.next/
+/web/.next/
 /out/
+/web/out/
 
 # production
 /build
+/web/build
+/extension/dist
+*.zip
 
 # misc
 .DS_Store
@@ -32,6 +39,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+web/.env*
 
 # vercel
 .vercel

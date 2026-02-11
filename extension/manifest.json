@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Limen Reddit Redirector",
+  "description": "Redirects newly opened Reddit post tabs to limen.sh with the Reddit link prefilled.",
+  "version": "0.1.0",
+  "permissions": ["tabs"],
+  "host_permissions": [
+    "https://reddit.com/*",
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://m.reddit.com/*",
+    "https://np.reddit.com/*",
+    "https://redd.it/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

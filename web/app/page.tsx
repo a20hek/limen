@@ -1,7 +1,14 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { type SubmitEvent, useMemo, useState } from "react";
+import {
+  type SubmitEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   type RedditCommentNode,
   type RedditViewerResponse,
@@ -16,18 +23,25 @@ function countReplies(node: RedditCommentNode): number {
   return count;
 }
 
+function isSameAuthor(authorA: string, authorB: string): boolean {
+  return authorA.trim().toLowerCase() === authorB.trim().toLowerCase();
+}
+
 function CommentTree({
   node,
   depth = 0,
+  opAuthor,
 }: {
   node: RedditCommentNode;
   depth?: number;
+  opAuthor: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const isOpComment = isSameAuthor(node.author, opAuthor);
 
   return (
     <div
-      className={`comment ${collapsed ? "comment-collapsed" : ""}`}
+      className={`comment ${isOpComment ? "comment-op" : ""} ${collapsed ? "comment-collapsed" : ""}`}
       style={{ marginLeft: `${depth * 16}px` }}
       onClick={(e) => {
         e.stopPropagation();
@@ -36,6 +50,7 @@ function CommentTree({
     >
       <div className="comment-meta">
         <span className="comment-author">u/{node.author}</span>
+        {isOpComment && <span className="comment-op-badge">OP</span>}
         <span className="comment-score">{formatScore(node.score)} points</span>
         <span className="comment-time">{formatRelative(node.createdUtc)}</span>
         {collapsed && node.replies.length > 0 && (
@@ -55,6 +70,7 @@ function CommentTree({
                   key={`${node.id}-${reply.id}`}
                   node={reply}
                   depth={depth + 1}
+                  opAuthor={opAuthor}
                 />
               ))}
             </div>
@@ -70,6 +86,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<RedditViewerResponse | null>(null);
+  const hasAutoOpenedRef = useRef(false);
 
   const sourceHost = useMemo(() => {
     if (!data?.post.url) return null;
@@ -80,10 +97,9 @@ export default function Home() {
     }
   }, [data]);
 
-  async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!url.trim()) {
+  const loadPost = useCallback(async (rawUrl: string) => {
+    const trimmedUrl = rawUrl.trim();
+    if (!trimmedUrl) {
       setError("Please paste a Reddit post URL.");
       return;
     }
@@ -95,7 +111,7 @@ export default function Home() {
       const response = await fetch("/api/reddit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: trimmedUrl }),
       });
 
       const payload = (await response.json()) as RedditViewerResponse & {
@@ -117,6 +133,26 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    if (hasAutoOpenedRef.current) {
+      return;
+    }
+
+    hasAutoOpenedRef.current = true;
+    const incomingUrl = new URLSearchParams(window.location.search).get("url");
+    if (!incomingUrl?.trim()) {
+      return;
+    }
+
+    setUrl(incomingUrl);
+    void loadPost(incomingUrl);
+  }, [loadPost]);
+
+  async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void loadPost(url);
   }
 
   return (
@@ -238,7 +274,11 @@ export default function Home() {
             {data.comments.length > 0 ? (
               <div className="comments-list">
                 {data.comments.map((comment) => (
-                  <CommentTree key={comment.id} node={comment} />
+                  <CommentTree
+                    key={comment.id}
+                    node={comment}
+                    opAuthor={data.post.author}
+                  />
                 ))}
               </div>
             ) : (
