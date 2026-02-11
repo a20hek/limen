@@ -12,6 +12,7 @@ this extension does two things:
 - supports google redirect links (like `google.com/url?...q=<reddit-url>`)
 - ignores subreddit/home/profile pages
 - redirect target looks like: `https://limen.sh/?url=<encoded_original_reddit_url>`
+- source files are TypeScript (`background.ts`, `content.ts`) and are built to JS before packing
 
 ## install (dev)
 
@@ -37,7 +38,7 @@ this extension does two things:
 
 this repo defaults to `https://limen.sh`.
 
-for local dev, set `LIMEN_BASE_URL` in `background.js` to `http://localhost:3000`.
+for local dev, set `LIMEN_BASE_URL` in `background.ts` to `http://localhost:3000`, then run `bun run build`.
 
 ## permissions (why we ask)
 

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "pack": "mkdir -p dist && zip -r dist/limen-extension.zip manifest.json background.js content.js README.md"
+    "build": "bun build ./background.ts --outfile ./background.js --target browser && bun build ./content.ts --outfile ./content.js --target browser",
+    "pack": "bun run build && mkdir -p dist && zip -r dist/limen-extension.zip manifest.json background.js content.js README.md"
   }
 }
