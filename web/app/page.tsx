@@ -12,8 +12,10 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type Hls from 'hls.js';
 import {
 	type RedditCommentNode,
+	type RedditMediaItem,
 	type RedditViewerResponse,
 	formatDate,
 	formatRelative,
@@ -127,6 +129,72 @@ function MarkdownText({ markdown, className }: { markdown: string; className: st
 			</ReactMarkdown>
 		</div>
 	);
+}
+
+function RedditVideo({ item }: { item: Extract<RedditMediaItem, { kind: 'video' }> }) {
+	const videoRef = useRef<HTMLVideoElement | null>(null);
+
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video) return;
+
+		let hlsInstance: Hls | null = null;
+		let canceled = false;
+
+		video.defaultMuted = false;
+		video.muted = false;
+
+		const setFallbackSource = () => {
+			if (video.src !== item.url) {
+				video.src = item.url;
+				video.load();
+			}
+		};
+
+		if (!item.hlsUrl) {
+			setFallbackSource();
+			return;
+		}
+
+		const nativeHlsSupport = video.canPlayType('application/vnd.apple.mpegurl');
+		if (nativeHlsSupport) {
+			video.src = item.hlsUrl;
+			return;
+		}
+
+		void (async () => {
+			try {
+				const { default: Hls } = await import('hls.js');
+				if (canceled) return;
+
+				if (!Hls.isSupported()) {
+					setFallbackSource();
+					return;
+				}
+
+				hlsInstance = new Hls();
+				hlsInstance.loadSource(item.hlsUrl!);
+				hlsInstance.attachMedia(video);
+
+				hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
+					if (data?.fatal) {
+						hlsInstance?.destroy();
+						hlsInstance = null;
+						setFallbackSource();
+					}
+				});
+			} catch {
+				setFallbackSource();
+			}
+		})();
+
+		return () => {
+			canceled = true;
+			hlsInstance?.destroy();
+		};
+	}, [item.hlsUrl, item.url]);
+
+	return <video ref={videoRef} controls preload='metadata' playsInline />;
 }
 
 function CommentTree({
@@ -324,12 +392,7 @@ export default function Home() {
 												)}
 											</figure>
 										) : (
-											<video
-												key={`${item.url}-${index}`}
-												controls
-												preload='metadata'
-												src={item.url}
-											/>
+											<RedditVideo key={`${item.url}-${index}`} item={item} />
 										)
 									)}
 								</div>

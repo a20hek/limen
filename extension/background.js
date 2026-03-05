@@ -14,6 +14,7 @@ var MAX_COMMENT_DEPTH = 20;
 var MORE_CHILDREN_BATCH = 100;
 
 class ValidationError extends Error {
+  status;
   constructor(message) {
     super(message);
     this.name = "ValidationError";
@@ -22,6 +23,7 @@ class ValidationError extends Error {
 }
 
 class UpstreamError extends Error {
+  status;
   constructor(message, status = 502) {
     super(message);
     this.name = "UpstreamError";
@@ -145,10 +147,14 @@ function extractPostMedia(postData) {
     return media;
   }
   const redditVideo = postData.secure_media?.reddit_video;
-  if (redditVideo?.fallback_url) {
+  if (redditVideo?.fallback_url || redditVideo?.hls_url) {
+    const fallbackUrl = typeof redditVideo.fallback_url === "string" ? decodeHtmlEntities(redditVideo.fallback_url) : "";
+    const hlsUrl = typeof redditVideo.hls_url === "string" ? decodeHtmlEntities(redditVideo.hls_url) : "";
     media.push({
       kind: "video",
-      url: decodeHtmlEntities(redditVideo.fallback_url),
+      url: fallbackUrl || hlsUrl,
+      hlsUrl: hlsUrl || undefined,
+      hasAudio: typeof redditVideo.has_audio === "boolean" ? redditVideo.has_audio : undefined,
       width: redditVideo.width,
       height: redditVideo.height
     });

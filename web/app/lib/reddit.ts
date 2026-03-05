@@ -18,6 +18,8 @@ export type RedditMediaItem =
   | {
       kind: "video";
       url: string;
+      hlsUrl?: string;
+      hasAudio?: boolean;
       width?: number;
       height?: number;
     };
