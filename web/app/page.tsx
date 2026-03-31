@@ -2,7 +2,10 @@
 /* eslint-disable @next/next/no-img-element */
 
 import {
+	Children,
+	isValidElement,
 	type MouseEvent,
+	type ReactNode,
 	type SubmitEvent,
 	useCallback,
 	useEffect,
@@ -103,17 +106,142 @@ function stopPropagation(event: MouseEvent<HTMLElement>) {
 	event.stopPropagation();
 }
 
+function getSafeHttpUrl(value: string): URL | null {
+	try {
+		const url = new URL(value);
+		if (url.protocol === 'http:' || url.protocol === 'https:') {
+			return url;
+		}
+	} catch {
+		// invalid or unsupported URL
+	}
+
+	return null;
+}
+
+function getMediaKindFromUrl(value: string): 'image' | 'video' | null {
+	const url = getSafeHttpUrl(value);
+	if (!url) return null;
+
+	const pathname = url.pathname.toLowerCase();
+	const extension = pathname.split('.').pop() ?? '';
+	const format = url.searchParams.get('format')?.toLowerCase() ?? '';
+
+	if (
+		['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(extension) ||
+		['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(format)
+	) {
+		return 'image';
+	}
+
+	if (
+		['mp4', 'webm', 'mov', 'm4v', 'gifv'].includes(extension) ||
+		['mp4', 'webm'].includes(format)
+	) {
+		return 'video';
+	}
+
+	return null;
+}
+
+function getNodeText(node: ReactNode): string {
+	if (typeof node === 'string' || typeof node === 'number') {
+		return String(node);
+	}
+
+	if (Array.isArray(node)) {
+		return node.map(getNodeText).join('');
+	}
+
+	if (isValidElement<{ children?: ReactNode }>(node)) {
+		return getNodeText(node.props.children);
+	}
+
+	return '';
+}
+
+function getStandaloneMediaUrl(children: ReactNode): string | null {
+	const meaningfulChildren = Children.toArray(children).filter(
+		(child) => !(typeof child === 'string' && child.trim() === '')
+	);
+
+	if (meaningfulChildren.length !== 1) {
+		return null;
+	}
+
+	const child = meaningfulChildren[0];
+	if (!isValidElement<{ href?: string; children?: ReactNode }>(child) || child.type !== 'a') {
+		return null;
+	}
+
+	const href = typeof child.props.href === 'string' ? child.props.href : '';
+	if (!href || getNodeText(child.props.children).trim() !== href) {
+		return null;
+	}
+
+	return getMediaKindFromUrl(href) ? href : null;
+}
+
+function MarkdownMedia({ href }: { href: string }) {
+	const mediaKind = getMediaKindFromUrl(href);
+	if (!mediaKind) {
+		return null;
+	}
+
+	const safeUrl = getSafeHttpUrl(href);
+	if (!safeUrl) {
+		return null;
+	}
+
+	if (mediaKind === 'image') {
+		return (
+			<div className='markdown-media' onClick={stopPropagation} onDoubleClick={stopPropagation}>
+				<img src={safeUrl.toString()} alt='' loading='lazy' />
+			</div>
+		);
+	}
+
+	return (
+		<div className='markdown-media' onClick={stopPropagation} onDoubleClick={stopPropagation}>
+			<video src={safeUrl.toString()} controls preload='metadata' playsInline />
+		</div>
+	);
+}
+
 function MarkdownText({ markdown, className }: { markdown: string; className: string }) {
 	return (
 		<div className={className}>
 			<ReactMarkdown
 				remarkPlugins={[remarkGfm]}
 				components={{
+					p: ({ children, ...props }) => {
+						const mediaUrl = getStandaloneMediaUrl(children);
+						if (mediaUrl) {
+							return <MarkdownMedia href={mediaUrl} />;
+						}
+
+						return <p {...props}>{children}</p>;
+					},
 					a: ({ onClick, onDoubleClick, ...props }) => (
 						<a
 							{...props}
 							target='_blank'
 							rel='noopener noreferrer'
+							onClick={(event) => {
+								event.stopPropagation();
+								onClick?.(event);
+							}}
+							onDoubleClick={(event) => {
+								event.stopPropagation();
+								onDoubleClick?.(event);
+							}}
+						/>
+					),
+					img: ({ alt, onClick, onDoubleClick, ...props }) => (
+						<img
+							{...props}
+							alt={alt ?? ''}
+							loading='lazy'
 							onClick={(event) => {
 								event.stopPropagation();
 								onClick?.(event);
