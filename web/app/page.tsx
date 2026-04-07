@@ -127,17 +127,23 @@ function getMediaKindFromUrl(value: string): 'image' | 'video' | null {
 	const extension = pathname.split('.').pop() ?? '';
 	const format = url.searchParams.get('format')?.toLowerCase() ?? '';
 
-	if (
-		['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(extension) ||
-		['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(format)
-	) {
+	// Some Reddit-hosted GIF URLs end with `.gif` but explicitly request `format=mp4`.
+	// Respect explicit format first to avoid rendering video URLs in `<img>`.
+	if (['mp4', 'webm'].includes(format)) {
+		return 'video';
+	}
+
+	if (['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(format)) {
 		return 'image';
 	}
 
 	if (
-		['mp4', 'webm', 'mov', 'm4v', 'gifv'].includes(extension) ||
-		['mp4', 'webm'].includes(format)
+		['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(extension)
 	) {
+		return 'image';
+	}
+
+	if (['mp4', 'webm', 'mov', 'm4v', 'gifv'].includes(extension)) {
 		return 'video';
 	}
 
@@ -237,21 +243,43 @@ function MarkdownText({ markdown, className }: { markdown: string; className: st
 							}}
 						/>
 					),
-					img: ({ alt, onClick, onDoubleClick, ...props }) => (
-						<img
-							{...props}
-							alt={alt ?? ''}
-							loading='lazy'
-							onClick={(event) => {
-								event.stopPropagation();
-								onClick?.(event);
-							}}
-							onDoubleClick={(event) => {
-								event.stopPropagation();
-								onDoubleClick?.(event);
-							}}
-						/>
-					),
+					img: ({ alt, onClick, onDoubleClick, ...props }) => {
+						const src = typeof props.src === 'string' ? getSafeHttpUrl(props.src)?.toString() : null;
+						if (!src) {
+							return null;
+						}
+
+						const mediaKind = getMediaKindFromUrl(src);
+						if (mediaKind === 'video') {
+							return (
+								<video
+									src={src}
+									controls
+									preload='metadata'
+									playsInline
+									onClick={stopPropagation}
+									onDoubleClick={stopPropagation}
+								/>
+							);
+						}
+
+						return (
+							<img
+								{...props}
+								src={src}
+								alt={alt ?? ''}
+								loading='lazy'
+								onClick={(event) => {
+									event.stopPropagation();
+									onClick?.(event);
+								}}
+								onDoubleClick={(event) => {
+									event.stopPropagation();
+									onDoubleClick?.(event);
+								}}
+							/>
+						);
+					},
 				}}>
 				{markdown}
 			</ReactMarkdown>
