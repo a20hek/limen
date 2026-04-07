@@ -150,22 +150,6 @@ function getMediaKindFromUrl(value: string): 'image' | 'video' | null {
 	return null;
 }
 
-function getNodeText(node: ReactNode): string {
-	if (typeof node === 'string' || typeof node === 'number') {
-		return String(node);
-	}
-
-	if (Array.isArray(node)) {
-		return node.map(getNodeText).join('');
-	}
-
-	if (isValidElement<{ children?: ReactNode }>(node)) {
-		return getNodeText(node.props.children);
-	}
-
-	return '';
-}
-
 function getStandaloneMediaUrl(children: ReactNode): string | null {
 	const meaningfulChildren = Children.toArray(children).filter(
 		(child) => !(typeof child === 'string' && child.trim() === '')
@@ -176,12 +160,21 @@ function getStandaloneMediaUrl(children: ReactNode): string | null {
 	}
 
 	const child = meaningfulChildren[0];
-	if (!isValidElement<{ href?: string; children?: ReactNode }>(child) || child.type !== 'a') {
+	if (typeof child === 'string') {
+		const candidate = child.trim();
+		if (!candidate || /\s/.test(candidate)) {
+			return null;
+		}
+
+		return getMediaKindFromUrl(candidate) ? candidate : null;
+	}
+
+	if (!isValidElement<{ href?: string }>(child)) {
 		return null;
 	}
 
-	const href = typeof child.props.href === 'string' ? child.props.href : '';
-	if (!href || getNodeText(child.props.children).trim() !== href) {
+	const href = typeof child.props.href === 'string' ? child.props.href.trim() : '';
+	if (!href) {
 		return null;
 	}
 

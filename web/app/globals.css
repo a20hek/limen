@@ -350,6 +350,12 @@
 	margin: 0;
 }
 
+.comment-body .markdown-media,
+.comment-body img,
+.comment-body video {
+	max-width: min(100%, 6rem);
+}
+
 .markdown-content {
 	overflow-wrap: anywhere;
 }
