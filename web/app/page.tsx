@@ -383,6 +383,7 @@ export default function Home() {
 	const [error, setError] = useState('');
 	const [data, setData] = useState<RedditViewerResponse | null>(null);
 	const hasAutoOpenedRef = useRef(false);
+	const postTitle = data?.post.title?.trim();
 
 	const sourceHost = useMemo(() => {
 		if (!data?.post.url) return null;
@@ -432,6 +433,10 @@ export default function Home() {
 		setUrl(incomingUrl);
 		void loadPost(incomingUrl);
 	}, [loadPost]);
+
+	useEffect(() => {
+		document.title = postTitle && postTitle.length > 0 ? postTitle : 'Limen';
+	}, [postTitle]);
 
 	async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
 		event.preventDefault();
